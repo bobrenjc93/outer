@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -74,30 +75,54 @@ def get_ai_command(provider: AIProvider, yolo: bool = False) -> list[str]:
     return cmd
 
 
-def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = False, timeout: int = 300) -> str:
-    """Call the AI provider with the given prompt and return the response."""
+def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = False, timeout: int = 300, max_retries: int = 3) -> str:
+    """Call the AI provider with the given prompt and return the response.
+
+    Uses exponential backoff for retries on failure.
+    """
     cmd = get_ai_command(provider, yolo=yolo)
 
-    try:
-        result = subprocess.run(
-            cmd + [prompt],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=str(working_dir),
-        )
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            result = subprocess.run(
+                cmd + [prompt],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=str(working_dir),
+            )
 
-        if result.returncode != 0:
-            print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
-            print(f"Stderr: {result.stderr}")
+            if result.returncode != 0:
+                print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
+                print(f"Stderr: {result.stderr}")
+                # Treat non-zero exit code as a failure that can be retried
+                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
 
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        print(f"Error: AI call timed out after {timeout} seconds")
-        sys.exit(1)
-    except FileNotFoundError:
-        print(f"Error: {provider.value} CLI not found. Make sure it's installed and in PATH.")
-        sys.exit(1)
+            return result.stdout.strip()
+        except subprocess.TimeoutExpired as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
+                print(f"AI call timed out (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"Error: AI call timed out after {max_retries} attempts")
+        except subprocess.CalledProcessError as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
+                print(f"AI call failed (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"Error: AI call failed after {max_retries} attempts")
+        except FileNotFoundError:
+            print(f"Error: {provider.value} CLI not found. Make sure it's installed and in PATH.")
+            sys.exit(1)
+
+    # All retries exhausted
+    print(f"Error: AI invocation failed after {max_retries} attempts. Stopping.")
+    sys.exit(1)
 
 
 def read_file(filepath: str) -> Optional[str]:
