@@ -166,6 +166,24 @@ def is_plan_complete(plan_content: str) -> bool:
     return pending == 0
 
 
+def is_valid_plan_format(plan_content: str) -> bool:
+    """Check if the plan follows the expected TODO format.
+
+    A valid plan has at least one TODO item with the expected structure.
+    """
+    # Check for at least one TODO item (completed or pending)
+    todo_pattern = r"- \[[ x]\] TODO:"
+    if not re.search(todo_pattern, plan_content):
+        return False
+
+    # Check for Status field (required in TODO format)
+    status_pattern = r"- Status:\s*(PENDING|IN_PROGRESS|DONE|VERIFIED)"
+    if not re.search(status_pattern, plan_content):
+        return False
+
+    return True
+
+
 def generate_initial_plan(provider: AIProvider, requirements: str, working_dir: Path, yolo: bool = False) -> str:
     """Generate the initial plan.md from requirements."""
     prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
@@ -354,7 +372,21 @@ def main():
     # Step 2: Generate or load plan
     plan_content = read_file(plan_path)
     if plan_content:
-        print(f"✓ Found existing {args.plan}")
+        if is_valid_plan_format(plan_content):
+            pending_todos = count_pending_todos(plan_content)
+            total_todos = count_total_todos(plan_content)
+            completed_todos = total_todos - pending_todos
+            print(f"✓ Found existing {args.plan} in valid TODO format")
+            print(f"  Resuming: {completed_todos}/{total_todos} TODOs completed, {pending_todos} remaining")
+        else:
+            print(f"Warning: Existing {args.plan} is not in expected TODO format.")
+            print("Regenerating plan...")
+            if args.dry_run:
+                print("[DRY RUN] Would regenerate plan.md")
+                return
+            plan_content = generate_initial_plan(provider, requirements, target_dir, yolo=args.yolo)
+            write_file(plan_path, plan_content)
+            print(f"✓ Regenerated {args.plan}")
     else:
         print(f"Generating initial plan...")
         if args.dry_run:
