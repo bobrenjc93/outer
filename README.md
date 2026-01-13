@@ -19,7 +19,7 @@ Ensure you have Python 3 and at least one supported AI CLI installed:
 
 - [Claude CLI](https://github.com/anthropics/claude-code)
 - [Codex CLI](https://github.com/openai/codex)
-- Gemini CLI
+- [Gemini CLI](https://geminicli.com/)
 
 ## Usage
 
