@@ -84,7 +84,7 @@ def get_ai_command(provider: AIProvider, prompt: str, yolo: bool = False) -> lis
     return cmd
 
 
-def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = False, timeout: int = 300, max_retries: int = 3) -> str:
+def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3) -> str:
     """Call the AI provider with the given prompt and return the response.
 
     Uses exponential backoff for retries on failure.
@@ -236,7 +236,7 @@ Important:
 After completing the task, output the UPDATED plan.md content.
 Start your response with "UPDATED_PLAN:" followed by the complete updated plan.md content."""
 
-    response = call_ai(provider, prompt, working_dir, yolo=yolo, timeout=600)
+    response = call_ai(provider, prompt, working_dir, yolo=yolo)
 
     # Extract the updated plan from the response
     if "UPDATED_PLAN:" in response:
