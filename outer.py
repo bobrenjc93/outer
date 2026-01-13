@@ -53,24 +53,33 @@ Example:
 """
 
 
-def get_ai_command(provider: AIProvider, yolo: bool = False) -> list[str]:
-    """Get the command to invoke the specified AI provider."""
-    commands = {
-        AIProvider.CLAUDE: ["claude", "-p"],
+def get_ai_command(provider: AIProvider, prompt: str, yolo: bool = False) -> list[str]:
+    """Get the full command to invoke the specified AI provider with the prompt."""
+    # Base command for each provider
+    base_commands = {
+        AIProvider.CLAUDE: ["claude"],
         AIProvider.CODEX: ["codex", "exec", "--skip-git-repo-check"],
-        AIProvider.GEMINI: ["gemini"],  # Adjust based on actual CLI
+        AIProvider.GEMINI: ["gemini"],
     }
 
     # YOLO flags for each provider (skip permission prompts)
     yolo_flags = {
         AIProvider.CLAUDE: ["--dangerously-skip-permissions"],
         AIProvider.CODEX: ["--full-auto"],
-        AIProvider.GEMINI: ["--auto-approve"],  # Adjust based on actual CLI
+        AIProvider.GEMINI: ["--yolo"],
     }
 
-    cmd = commands[provider].copy()
+    # How to pass the prompt to each provider
+    prompt_flags = {
+        AIProvider.CLAUDE: ["-p", prompt],
+        AIProvider.CODEX: [prompt],  # Codex takes prompt as positional arg
+        AIProvider.GEMINI: ["-p", prompt],
+    }
+
+    cmd = base_commands[provider].copy()
     if yolo:
         cmd.extend(yolo_flags[provider])
+    cmd.extend(prompt_flags[provider])
 
     return cmd
 
@@ -80,13 +89,13 @@ def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = F
 
     Uses exponential backoff for retries on failure.
     """
-    cmd = get_ai_command(provider, yolo=yolo)
+    cmd = get_ai_command(provider, prompt, yolo=yolo)
 
     last_exception = None
     for attempt in range(max_retries):
         try:
             result = subprocess.run(
-                cmd + [prompt],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -263,7 +272,7 @@ UPDATED_PLAN:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AI Orchestrator - Iterative AI-driven development workflow"
+        description="Outer - Iterative AI-driven development workflow"
     )
     parser.add_argument(
         "--provider",
@@ -327,7 +336,7 @@ def main():
     requirements_path = target_dir / args.requirements
     plan_path = target_dir / args.plan
 
-    print(f"AI Orchestrator - Using {provider.value}")
+    print(f"Outer - Using {provider.value}")
     print(f"Target directory: {target_dir}")
     if args.yolo:
         print("YOLO mode: Permission prompts disabled")
