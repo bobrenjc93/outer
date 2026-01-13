@@ -57,7 +57,7 @@ def get_ai_command(provider: AIProvider, yolo: bool = False) -> list[str]:
     """Get the command to invoke the specified AI provider."""
     commands = {
         AIProvider.CLAUDE: ["claude", "-p"],
-        AIProvider.CODEX: ["codex", "-q"],
+        AIProvider.CODEX: ["codex", "exec", "--skip-git-repo-check"],
         AIProvider.GEMINI: ["gemini"],  # Adjust based on actual CLI
     }
 
