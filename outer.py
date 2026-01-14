@@ -288,7 +288,7 @@ GAPS_FOUND: YES or NO
 UPDATED_PLAN:
 <complete updated plan.md content, with any new TODOs added at the end>"""
 
-    response = call_ai(providers, prompt, working_dir, yolo=yolo, timeout=300)
+    response = call_ai(providers, prompt, working_dir, yolo=yolo)
 
     # Parse the response
     gaps_found = "GAPS_FOUND: YES" in response.upper()
