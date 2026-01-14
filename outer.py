@@ -208,7 +208,7 @@ def check_user_intervention(plan_content: str) -> Optional[str]:
     return None
 
 
-def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, yolo: bool = False) -> str:
+def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
     """Generate the initial plan.md from requirements."""
     prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
 
@@ -219,7 +219,7 @@ Requirements:
 {requirements}
 ---
 
-Create a plan.md file with:
+Write a {plan_filename} file with:
 1. An overview section summarizing the project
 2. A list of TODO items following the exact format specified above
 3. Each TODO should be atomic and independently verifiable
@@ -228,13 +228,13 @@ Create a plan.md file with:
 
 If at any point you are blocked and NEED USER HELP (e.g., you can't access files, need clarification
 on requirements, or encounter any issue that requires human intervention), add the following at the
-END of plan.md:
+END of {plan_filename}:
 
 NEED USER INTERVENTION: <describe the issue and what you need from the user>
 
-Output ONLY the contents of plan.md, no additional commentary."""
+Write the plan directly to {plan_filename}. Do not output the contents to stdout."""
 
-    return call_ai(providers, prompt, working_dir, yolo=yolo)
+    call_ai(providers, prompt, working_dir, yolo=yolo)
 
 
 def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> str:
@@ -435,11 +435,11 @@ def main():
             if args.dry_run:
                 print("[DRY RUN] Would regenerate plan.md")
                 return
-            plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
-            write_file(plan_path, plan_content)
+            generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo)
             print(f"✓ Regenerated {args.plan}")
 
             # Check for user intervention request
+            plan_content = read_file(plan_path)
             intervention_msg = check_user_intervention(plan_content)
             if intervention_msg:
                 print("\n" + "=" * 50)
@@ -454,11 +454,11 @@ def main():
         if args.dry_run:
             print("[DRY RUN] Would generate plan.md")
             return
-        plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
-        write_file(plan_path, plan_content)
+        generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo)
         print(f"✓ Generated {args.plan}")
 
         # Check for user intervention request
+        plan_content = read_file(plan_path)
         intervention_msg = check_user_intervention(plan_content)
         if intervention_msg:
             print("\n" + "=" * 50)
