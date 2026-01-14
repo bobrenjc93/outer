@@ -226,11 +226,17 @@ Write a {plan_filename} file with:
 4. Include verification steps (tests, manual checks, etc.) for each TODO
 5. Order TODOs by dependency (foundational items first)
 
-If at any point you are blocked and NEED USER HELP (e.g., you can't access files, need clarification
-on requirements, or encounter any issue that requires human intervention), add the following at the
-END of {plan_filename}:
+IMPORTANT: You should ONLY stop for user intervention if you CANNOT make verifiable progress towards
+the requirements specified in the requirements. Do NOT stop for:
+- Minor ambiguities you can make reasonable assumptions about
+- Optional improvements or nice-to-haves
+- Uncertainty about implementation details you can decide yourself
 
-NEED USER INTERVENTION: <describe the issue and what you need from the user>
+ONLY add the following at the END of {plan_filename} if you are truly blocked and cannot make ANY
+further progress towards the requirements (e.g., missing critical credentials, external dependencies
+that are inaccessible, or fundamental contradictions in the requirements):
+
+NEED USER INTERVENTION: <describe why you cannot make progress towards requirements>
 
 Write the plan directly to {plan_filename}. Do not output the contents to stdout."""
 
@@ -263,11 +269,18 @@ Important:
 - Include verification in your implementation
 - Update the Status field in the TODO item
 
-If at any point you are blocked and NEED USER HELP (e.g., you can't write files, can't run tests,
-can't install a dependency, need credentials, need clarification on requirements, or encounter
-any issue that requires human intervention), add the following at the END of plan.md:
+IMPORTANT: You should ONLY stop for user intervention if you CANNOT make verifiable progress towards
+the requirements specified in the requirements. Do NOT stop for:
+- Minor ambiguities you can make reasonable assumptions about
+- Optional improvements or nice-to-haves
+- Uncertainty about implementation details you can decide yourself
+- Tasks you can work around or defer
 
-NEED USER INTERVENTION: <describe the issue and what you need from the user>
+ONLY add the following at the END of plan.md if you are truly blocked and cannot make ANY further
+progress towards the requirements (e.g., missing critical credentials, external dependencies that
+are inaccessible, or fundamental contradictions in the requirements):
+
+NEED USER INTERVENTION: <describe why you cannot make progress towards requirements>
 
 After completing the task, output the UPDATED plan.md content.
 Start your response with "UPDATED_PLAN:" followed by the complete updated plan.md content."""
@@ -306,11 +319,17 @@ Your task:
 
 {TODO_FORMAT}
 
-If at any point you are blocked and NEED USER HELP (e.g., you can't access files, can't run tests,
-need credentials, need clarification on requirements, or encounter any issue that requires human
-intervention), add the following at the END of the plan:
+IMPORTANT: You should ONLY stop for user intervention if you CANNOT make verifiable progress towards
+the requirements. Do NOT stop for:
+- Minor ambiguities you can make reasonable assumptions about
+- Optional improvements or nice-to-haves
+- Uncertainty about implementation details you can decide yourself
 
-NEED USER INTERVENTION: <describe the issue and what you need from the user>
+ONLY add the following at the END of the plan if you are truly blocked and cannot make ANY further
+progress towards the requirements (e.g., missing critical credentials, external dependencies that
+are inaccessible, or fundamental contradictions in the requirements):
+
+NEED USER INTERVENTION: <describe why you cannot make progress towards requirements>
 
 Respond in this format:
 ANALYSIS: <brief analysis of coverage>
