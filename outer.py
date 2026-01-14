@@ -196,6 +196,18 @@ def is_valid_plan_format(plan_content: str) -> bool:
     return True
 
 
+def check_user_intervention(plan_content: str) -> Optional[str]:
+    """Check if the plan contains a user intervention request.
+
+    Returns the intervention message if found, None otherwise.
+    """
+    pattern = r"NEED USER INTERVENTION:\s*(.+?)(?:\n\n|\Z)"
+    match = re.search(pattern, plan_content, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, yolo: bool = False) -> str:
     """Generate the initial plan.md from requirements."""
     prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
@@ -213,6 +225,12 @@ Create a plan.md file with:
 3. Each TODO should be atomic and independently verifiable
 4. Include verification steps (tests, manual checks, etc.) for each TODO
 5. Order TODOs by dependency (foundational items first)
+
+If at any point you are blocked and NEED USER HELP (e.g., you can't access files, need clarification
+on requirements, or encounter any issue that requires human intervention), add the following at the
+END of plan.md:
+
+NEED USER INTERVENTION: <describe the issue and what you need from the user>
 
 Output ONLY the contents of plan.md, no additional commentary."""
 
@@ -244,6 +262,12 @@ Important:
 - Make sure to actually create/modify files as needed
 - Include verification in your implementation
 - Update the Status field in the TODO item
+
+If at any point you are blocked and NEED USER HELP (e.g., you can't write files, can't run tests,
+can't install a dependency, need credentials, need clarification on requirements, or encounter
+any issue that requires human intervention), add the following at the END of plan.md:
+
+NEED USER INTERVENTION: <describe the issue and what you need from the user>
 
 After completing the task, output the UPDATED plan.md content.
 Start your response with "UPDATED_PLAN:" followed by the complete updated plan.md content."""
@@ -281,6 +305,12 @@ Your task:
 4. Use the same TODO format as the existing items
 
 {TODO_FORMAT}
+
+If at any point you are blocked and NEED USER HELP (e.g., you can't access files, can't run tests,
+need credentials, need clarification on requirements, or encounter any issue that requires human
+intervention), add the following at the END of the plan:
+
+NEED USER INTERVENTION: <describe the issue and what you need from the user>
 
 Respond in this format:
 ANALYSIS: <brief analysis of coverage>
@@ -408,6 +438,17 @@ def main():
             plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
             write_file(plan_path, plan_content)
             print(f"✓ Regenerated {args.plan}")
+
+            # Check for user intervention request
+            intervention_msg = check_user_intervention(plan_content)
+            if intervention_msg:
+                print("\n" + "=" * 50)
+                print("🛑 USER INTERVENTION REQUIRED")
+                print("=" * 50)
+                print(f"\n{intervention_msg}")
+                print("\n" + "=" * 50)
+                print("Please resolve the issue above and remove the 'NEED USER INTERVENTION:' line from plan.md, then re-run.")
+                return
     else:
         print(f"Generating initial plan...")
         if args.dry_run:
@@ -416,6 +457,17 @@ def main():
         plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
         write_file(plan_path, plan_content)
         print(f"✓ Generated {args.plan}")
+
+        # Check for user intervention request
+        intervention_msg = check_user_intervention(plan_content)
+        if intervention_msg:
+            print("\n" + "=" * 50)
+            print("🛑 USER INTERVENTION REQUIRED")
+            print("=" * 50)
+            print(f"\n{intervention_msg}")
+            print("\n" + "=" * 50)
+            print("Please resolve the issue above and remove the 'NEED USER INTERVENTION:' line from plan.md, then re-run.")
+            return
 
     # Main loop
     iteration = 0
@@ -430,6 +482,18 @@ def main():
 
         # Read current plan
         plan_content = read_file(plan_path)
+
+        # Check for user intervention request
+        intervention_msg = check_user_intervention(plan_content)
+        if intervention_msg:
+            print("\n" + "=" * 50)
+            print("🛑 USER INTERVENTION REQUIRED")
+            print("=" * 50)
+            print(f"\n{intervention_msg}")
+            print("\n" + "=" * 50)
+            print("Please resolve the issue above and remove the 'NEED USER INTERVENTION:' line from plan.md, then re-run.")
+            break
+
         pending_todos = count_pending_todos(plan_content)
         total_todos = count_total_todos(plan_content)
 
