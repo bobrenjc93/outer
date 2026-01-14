@@ -116,7 +116,7 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                 last_exception = e
                 if attempt < max_retries - 1:
                     wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
-                    print(f"AI call timed out (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    print(f"AI call timed out with {provider.value} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
                     print(f"Error: AI call timed out after {max_retries} attempts with {provider.value}")
@@ -124,7 +124,7 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                 last_exception = e
                 if attempt < max_retries - 1:
                     wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
-                    print(f"AI call failed (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    print(f"AI call failed with {provider.value} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                 else:
                     print(f"Error: AI call failed after {max_retries} attempts with {provider.value}")
