@@ -413,7 +413,7 @@ def main():
         if args.dry_run:
             print("[DRY RUN] Would generate plan.md")
             return
-        plan_content = generate_initial_plan(provider, requirements, target_dir, yolo=args.yolo)
+        plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
         write_file(plan_path, plan_content)
         print(f"✓ Generated {args.plan}")
 
