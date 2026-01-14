@@ -84,53 +84,65 @@ def get_ai_command(provider: AIProvider, prompt: str, yolo: bool = False) -> lis
     return cmd
 
 
-def call_ai(provider: AIProvider, prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3) -> str:
+def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3) -> str:
     """Call the AI provider with the given prompt and return the response.
 
-    Uses exponential backoff for retries on failure.
+    Uses exponential backoff for retries on failure. If multiple providers are given,
+    fails over to the next provider after exhausting retries for the current one.
     """
-    cmd = get_ai_command(provider, prompt, yolo=yolo)
+    for provider_idx, provider in enumerate(providers):
+        cmd = get_ai_command(provider, prompt, yolo=yolo)
+        is_last_provider = provider_idx == len(providers) - 1
 
-    last_exception = None
-    for attempt in range(max_retries):
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(working_dir),
-            )
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(working_dir),
+                )
 
-            if result.returncode != 0:
-                print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
-                print(f"Stderr: {result.stderr}")
-                # Treat non-zero exit code as a failure that can be retried
-                raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+                if result.returncode != 0:
+                    print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
+                    print(f"Stderr: {result.stderr}")
+                    # Treat non-zero exit code as a failure that can be retried
+                    raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
 
-            return result.stdout.strip()
-        except subprocess.TimeoutExpired as e:
-            last_exception = e
-            if attempt < max_retries - 1:
-                wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
-                print(f"AI call timed out (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                print(f"Error: AI call timed out after {max_retries} attempts")
-        except subprocess.CalledProcessError as e:
-            last_exception = e
-            if attempt < max_retries - 1:
-                wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
-                print(f"AI call failed (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-            else:
-                print(f"Error: AI call failed after {max_retries} attempts")
-        except FileNotFoundError:
-            print(f"Error: {provider.value} CLI not found. Make sure it's installed and in PATH.")
+                return result.stdout.strip()
+            except subprocess.TimeoutExpired as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
+                    print(f"AI call timed out (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error: AI call timed out after {max_retries} attempts with {provider.value}")
+            except subprocess.CalledProcessError as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
+                    print(f"AI call failed (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error: AI call failed after {max_retries} attempts with {provider.value}")
+            except FileNotFoundError:
+                print(f"Error: {provider.value} CLI not found. Make sure it's installed and in PATH.")
+                if is_last_provider:
+                    sys.exit(1)
+                break  # Move to next provider
+
+        # All retries exhausted for this provider
+        if not is_last_provider:
+            print(f"Failing over to next provider: {providers[provider_idx + 1].value}")
+        else:
+            print(f"Error: AI invocation failed after trying all providers. Stopping.")
             sys.exit(1)
 
-    # All retries exhausted
-    print(f"Error: AI invocation failed after {max_retries} attempts. Stopping.")
+    # Should not reach here, but just in case
+    print("Error: No providers available.")
     sys.exit(1)
 
 
@@ -184,7 +196,7 @@ def is_valid_plan_format(plan_content: str) -> bool:
     return True
 
 
-def generate_initial_plan(provider: AIProvider, requirements: str, working_dir: Path, yolo: bool = False) -> str:
+def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, yolo: bool = False) -> str:
     """Generate the initial plan.md from requirements."""
     prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
 
@@ -204,10 +216,10 @@ Create a plan.md file with:
 
 Output ONLY the contents of plan.md, no additional commentary."""
 
-    return call_ai(provider, prompt, working_dir, yolo=yolo)
+    return call_ai(providers, prompt, working_dir, yolo=yolo)
 
 
-def execute_single_todo(provider: AIProvider, plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> str:
+def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> str:
     """Ask the AI to execute one TODO item and update the plan."""
     prompt = f"""You are a software developer. Here is the current project plan:
 
@@ -236,7 +248,7 @@ Important:
 After completing the task, output the UPDATED plan.md content.
 Start your response with "UPDATED_PLAN:" followed by the complete updated plan.md content."""
 
-    response = call_ai(provider, prompt, working_dir, yolo=yolo)
+    response = call_ai(providers, prompt, working_dir, yolo=yolo)
 
     # Extract the updated plan from the response
     if "UPDATED_PLAN:" in response:
@@ -248,7 +260,7 @@ Start your response with "UPDATED_PLAN:" followed by the complete updated plan.m
     return plan_content
 
 
-def validate_against_requirements(provider: AIProvider, plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> tuple[bool, str]:
+def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> tuple[bool, str]:
     """Check if the completed plan meets all requirements. Returns (is_complete, updated_plan)."""
     prompt = f"""You are a software architect reviewing completed work.
 
@@ -276,7 +288,7 @@ GAPS_FOUND: YES or NO
 UPDATED_PLAN:
 <complete updated plan.md content, with any new TODOs added at the end>"""
 
-    response = call_ai(provider, prompt, working_dir, yolo=yolo, timeout=300)
+    response = call_ai(providers, prompt, working_dir, yolo=yolo, timeout=300)
 
     # Parse the response
     gaps_found = "GAPS_FOUND: YES" in response.upper()
@@ -296,9 +308,8 @@ def main():
         "--provider",
         "-p",
         type=str,
-        choices=["claude", "codex", "gemini"],
         default="claude",
-        help="AI provider to use (default: claude)",
+        help="AI provider(s) to use, comma-separated for failover (e.g., 'claude,codex,gemini'). Default: claude",
     )
     parser.add_argument(
         "--dir",
@@ -339,7 +350,16 @@ def main():
     )
 
     args = parser.parse_args()
-    provider = AIProvider(args.provider)
+
+    # Parse and validate providers
+    provider_names = [p.strip().lower() for p in args.provider.split(",")]
+    valid_providers = {"claude", "codex", "gemini"}
+    providers = []
+    for name in provider_names:
+        if name not in valid_providers:
+            print(f"Error: Invalid provider '{name}'. Valid options: claude, codex, gemini")
+            sys.exit(1)
+        providers.append(AIProvider(name))
 
     # Resolve and validate target directory
     target_dir = Path(args.dir).resolve()
@@ -354,7 +374,8 @@ def main():
     requirements_path = target_dir / args.requirements
     plan_path = target_dir / args.plan
 
-    print(f"Outer - Using {provider.value}")
+    provider_list = ", ".join(p.value for p in providers)
+    print(f"Outer - Using provider(s): {provider_list}")
     print(f"Target directory: {target_dir}")
     if args.yolo:
         print("YOLO mode: Permission prompts disabled")
@@ -384,7 +405,7 @@ def main():
             if args.dry_run:
                 print("[DRY RUN] Would regenerate plan.md")
                 return
-            plan_content = generate_initial_plan(provider, requirements, target_dir, yolo=args.yolo)
+            plan_content = generate_initial_plan(providers, requirements, target_dir, yolo=args.yolo)
             write_file(plan_path, plan_content)
             print(f"✓ Regenerated {args.plan}")
     else:
@@ -422,7 +443,7 @@ def main():
                 break
 
             # Step 3: Execute one TODO
-            updated_plan = execute_single_todo(provider, plan_content, requirements, target_dir, yolo=args.yolo)
+            updated_plan = execute_single_todo(providers, plan_content, requirements, target_dir, yolo=args.yolo)
             write_file(plan_path, updated_plan)
             print(f"✓ Task completed and plan updated")
 
@@ -438,7 +459,7 @@ def main():
             break
 
         todos_before = count_total_todos(plan_content)
-        is_complete, updated_plan = validate_against_requirements(provider, plan_content, requirements, target_dir, yolo=args.yolo)
+        is_complete, updated_plan = validate_against_requirements(providers, plan_content, requirements, target_dir, yolo=args.yolo)
         todos_after = count_total_todos(updated_plan)
 
         write_file(plan_path, updated_plan)
