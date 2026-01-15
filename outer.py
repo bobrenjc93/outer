@@ -219,45 +219,74 @@ Write the plan directly to {plan_filename}. Do not output the contents to stdout
     call_ai(providers, prompt, working_dir, yolo=yolo)
 
 
-def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> str:
-    """Ask the AI to execute one TODO item and update the plan."""
-    prompt = f"""You are a software developer. Here is the current project plan:
+def get_first_pending_todo(plan_content: str) -> Optional[str]:
+    """Extract the description of the first pending TODO item."""
+    match = re.search(r"- \[ \] TODO:\s*(.+?)(?:\n|$)", plan_content)
+    if match:
+        return match.group(1).strip()
+    return None
 
----
-{plan_content}
----
 
-And the original requirements:
+def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
+    """Ask the AI to execute one TODO item and update the plan directly on disk."""
+    first_todo = get_first_pending_todo(plan_content)
+    todo_hint = f"\nThe first pending TODO is: {first_todo}" if first_todo else ""
+
+    prompt = f"""You are a software developer. Read the plan.md file in the current directory for the project plan.{todo_hint}
+
+The original requirements are:
 ---
 {requirements}
 ---
 
 Your task:
-1. Find the FIRST uncompleted TODO item (marked with `- [ ]`)
+1. Read {plan_filename} to find the FIRST uncompleted TODO item (marked with `- [ ]`)
 2. Implement that task completely
-3. Add verification (write a test, add a check, etc.)
-4. Run the verification to confirm the task is complete
-5. Update the plan.md to mark the TODO as done (change `- [ ]` to `- [x]`) and update Status to DONE or VERIFIED
+3. Run verification to confirm the task is complete
+4. IMPORTANT: Update {plan_filename} directly to mark the TODO as done (change `- [ ]` to `- [x]`) and update Status to DONE or VERIFIED
+
+CRITICAL REQUIREMENTS:
+- You MUST complete at least one TODO before finishing. Do not exit without marking at least one TODO as done in {plan_filename}.
+- If a TODO is too large or complex to complete in one session, you MUST:
+  1. Edit {plan_filename} to break it down into smaller, more manageable sub-TODOs
+  2. Complete at least ONE of those smaller TODOs
+  3. Mark that smaller TODO as done in {plan_filename}
+- Never end your session with zero TODOs completed. This is a hard requirement.
+- You MUST edit {plan_filename} to mark the completed TODO. This is mandatory.
 
 Important:
 - Only work on ONE TODO at a time
 - Make sure to actually create/modify files as needed
-- Include verification in your implementation
 - Update the Status field in the TODO item
+- Do NOT output the plan content - just update the file directly"""
 
-After completing the task, output the UPDATED plan.md content.
-Start your response with "UPDATED_PLAN:" followed by the complete updated plan.md content."""
+    call_ai(providers, prompt, working_dir, yolo=yolo)
 
-    response = call_ai(providers, prompt, working_dir, yolo=yolo)
 
-    # Extract the updated plan from the response
-    if "UPDATED_PLAN:" in response:
-        updated_plan = response.split("UPDATED_PLAN:", 1)[1].strip()
-        return updated_plan
+def force_breakdown_todo(providers: list[AIProvider], plan_content: str, stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
+    """Force the AI to break down a stuck TODO into smaller pieces."""
+    prompt = f"""You are a software architect. The following TODO has been stuck and not making progress:
 
-    # If format not followed, return original plan
-    print("Warning: AI did not follow expected output format. Plan may not be updated.")
-    return plan_content
+STUCK TODO: {stuck_todo}
+
+Current {plan_filename}:
+---
+{plan_content}
+---
+
+Your task:
+1. This TODO is too large. You MUST break it down into 2-4 smaller, atomic sub-TODOs.
+2. Edit {plan_filename} directly to:
+   - Remove or comment out the original stuck TODO
+   - Add the new smaller TODOs in its place, following the same format
+   - Each sub-TODO must be small enough to complete in one session
+3. Then complete the FIRST of the new smaller TODOs
+4. Mark that completed TODO as done in {plan_filename}
+
+CRITICAL: You MUST edit {plan_filename} and mark at least one TODO as completed before finishing.
+Do NOT output the plan content - just update the file directly."""
+
+    call_ai(providers, prompt, working_dir, yolo=yolo)
 
 
 def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> tuple[bool, str]:
@@ -419,6 +448,9 @@ def main():
     iteration = 0
     validation_cycles = 0
     max_validation_cycles = 3  # Prevent infinite validation loops
+    stall_count = 0  # Track consecutive iterations with no progress
+    max_stall_count = 3  # After this many stalls, force task breakdown
+    last_pending_count = -1  # Track pending count to detect stalls
 
     while iteration < args.max_iterations:
         iteration += 1
@@ -426,7 +458,7 @@ def main():
         print(f"Iteration {iteration}")
         print(f"{'='*50}")
 
-        # Read current plan
+        # Read current plan from disk
         plan_content = read_file(plan_path)
 
         pending_todos = count_pending_todos(plan_content)
@@ -434,17 +466,40 @@ def main():
 
         print(f"TODOs: {total_todos - pending_todos}/{total_todos} completed")
 
+        # Detect stalls (same pending count as last iteration)
+        if pending_todos > 0 and pending_todos == last_pending_count:
+            stall_count += 1
+            print(f"⚠ No progress detected (stall count: {stall_count}/{max_stall_count})")
+        else:
+            stall_count = 0  # Reset on progress
+        last_pending_count = pending_todos
+
         # Step 3-4: Check if plan has pending TODOs
         if pending_todos > 0:
-            print(f"\nExecuting next TODO...")
             if args.dry_run:
                 print("[DRY RUN] Would execute next TODO")
                 break
 
-            # Step 3: Execute one TODO
-            updated_plan = execute_single_todo(providers, plan_content, requirements, target_dir, yolo=args.yolo)
-            write_file(plan_path, updated_plan)
-            print(f"✓ Task completed and plan updated")
+            # If we've stalled too many times, force a breakdown
+            if stall_count >= max_stall_count:
+                stuck_todo = get_first_pending_todo(plan_content)
+                print(f"\n⚠ Task appears stuck. Forcing breakdown of: {stuck_todo}")
+                force_breakdown_todo(providers, plan_content, stuck_todo, target_dir, args.plan, yolo=args.yolo)
+                stall_count = 0  # Reset after breakdown attempt
+                print(f"✓ Task breakdown attempted")
+            else:
+                print(f"\nExecuting next TODO...")
+                execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo)
+                print(f"✓ Task execution completed")
+
+            # Read the plan from disk to check for updates (AI should have modified it)
+            new_plan_content = read_file(plan_path)
+            new_pending = count_pending_todos(new_plan_content)
+
+            if new_pending < pending_todos:
+                print(f"✓ Progress: {pending_todos - new_pending} TODO(s) completed")
+            elif new_pending > pending_todos:
+                print(f"✓ Task broken down: {new_pending - pending_todos} new TODO(s) added")
 
             # Reset validation cycles when doing tasks
             validation_cycles = 0
