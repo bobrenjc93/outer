@@ -58,14 +58,14 @@ def get_ai_command(provider: AIProvider, prompt: str, yolo: bool = False) -> lis
     # Base command for each provider
     base_commands = {
         AIProvider.CLAUDE: ["claude"],
-        AIProvider.CODEX: ["codex", "exec", "--skip-git-repo-check"],
+        AIProvider.CODEX: ["codex", "--yolo", "exec"],
         AIProvider.GEMINI: ["gemini"],
     }
 
     # YOLO flags for each provider (skip permission prompts)
     yolo_flags = {
         AIProvider.CLAUDE: ["--dangerously-skip-permissions"],
-        AIProvider.CODEX: ["--full-auto"],
+        AIProvider.CODEX: [],
         AIProvider.GEMINI: ["--yolo"],
     }
 
