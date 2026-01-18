@@ -16,12 +16,36 @@ python outer.py -d /path/to/project -p claude --yolo -m 100
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
+import uuid
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+
+# Session state for tracking prompts
+_session_dir: Optional[Path] = None
+_step_counter: int = 0
+
+
+def init_session() -> Path:
+    """Initialize a new session directory for storing prompts."""
+    global _session_dir, _step_counter
+    _session_dir = Path(f"/tmp/outer/{uuid.uuid4()}")
+    _session_dir.mkdir(parents=True, exist_ok=True)
+    _step_counter = 0
+    print(f"Session directory: {_session_dir}")
+    return _session_dir
+
+
+def get_next_prompt_file() -> Path:
+    """Get the path for the next prompt file."""
+    global _step_counter
+    _step_counter += 1
+    return _session_dir / f"step_{_step_counter}.txt"
 
 
 class AIProvider(Enum):
@@ -53,26 +77,52 @@ Example:
 """
 
 
-def get_ai_command(provider: AIProvider, prompt: str, yolo: bool = False) -> list[str]:
-    """Get the full command to invoke the specified AI provider with the prompt."""
-    # Base command for each provider
+def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -> str:
+    """Get a display-friendly command string that references the prompt file."""
+    base_commands = {
+        AIProvider.CLAUDE: "claude",
+        AIProvider.CODEX: "codex",
+        AIProvider.GEMINI: "gemini",
+    }
+
+    yolo_flags = {
+        AIProvider.CLAUDE: "--dangerously-skip-permissions",
+        AIProvider.CODEX: "--yolo",
+        AIProvider.GEMINI: "--yolo",
+    }
+
+    # Command templates with prompt file substitution
+    prompt_templates = {
+        AIProvider.CLAUDE: '-p "$(cat {prompt_file})"',
+        AIProvider.CODEX: 'exec --skip-git-repo-check "$(cat {prompt_file})"',
+        AIProvider.GEMINI: '-p "$(cat {prompt_file})"',
+    }
+
+    parts = [base_commands[provider]]
+    if yolo:
+        parts.append(yolo_flags[provider])
+    parts.append(prompt_templates[provider].format(prompt_file=shlex.quote(prompt_file)))
+
+    return " ".join(parts)
+
+
+def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = False) -> list[str]:
+    """Get the command with the actual prompt embedded (for subprocess execution)."""
     base_commands = {
         AIProvider.CLAUDE: ["claude"],
         AIProvider.CODEX: ["codex"],
         AIProvider.GEMINI: ["gemini"],
     }
 
-    # YOLO flags for each provider (skip permission prompts)
     yolo_flags = {
         AIProvider.CLAUDE: ["--dangerously-skip-permissions"],
         AIProvider.CODEX: ["--yolo"],
         AIProvider.GEMINI: ["--yolo"],
     }
 
-    # How to pass the prompt to each provider
     prompt_flags = {
         AIProvider.CLAUDE: ["-p", prompt],
-        AIProvider.CODEX: ["exec", "--skip-git-repo-check", prompt],  # Codex takes prompt as positional arg
+        AIProvider.CODEX: ["exec", "--skip-git-repo-check", prompt],
         AIProvider.GEMINI: ["-p", prompt],
     }
 
@@ -90,15 +140,24 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
     Uses exponential backoff for retries on failure. If multiple providers are given,
     fails over to the next provider after exhausting retries for the current one.
     """
+    # Write prompt to sequential file for reproducibility
+    prompt_file = get_next_prompt_file()
+    prompt_file.write_text(prompt)
+
     for provider_idx, provider in enumerate(providers):
-        cmd = get_ai_command(provider, prompt, yolo=yolo)
+        # Build the actual command with prompt inline (for subprocess)
+        actual_cmd = _get_ai_command_with_prompt(provider, prompt, yolo=yolo)
+        # Build display command referencing the file (for logging)
+        display_cmd = get_ai_command(provider, str(prompt_file), yolo=yolo)
         is_last_provider = provider_idx == len(providers) - 1
 
         last_exception = None
         for attempt in range(max_retries):
             try:
+                # Print command for reproducibility (references prompt file)
+                print(f"\n[CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}\n")
                 result = subprocess.run(
-                    cmd,
+                    actual_cmd,
                     capture_output=True,
                     text=True,
                     timeout=timeout,
@@ -109,7 +168,7 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                     print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
                     print(f"Stderr: {result.stderr}")
                     # Treat non-zero exit code as a failure that can be retried
-                    raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+                    raise subprocess.CalledProcessError(result.returncode, actual_cmd, result.stdout, result.stderr)
 
                 return result.stdout.strip()
             except subprocess.TimeoutExpired as e:
@@ -409,6 +468,9 @@ def main():
     if args.yolo:
         print("YOLO mode: Permission prompts disabled")
     print("=" * 50)
+
+    # Initialize session for prompt logging
+    init_session()
 
     # Step 1: Read requirements
     requirements = read_file(requirements_path)
