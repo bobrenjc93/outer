@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -29,15 +30,38 @@ from typing import Optional
 # Session state for tracking prompts
 _session_dir: Optional[Path] = None
 _step_counter: int = 0
+_iteration_start_time: Optional[float] = None
+_session_start_time: Optional[float] = None
+
+
+def timestamp() -> str:
+    """Return current timestamp in HH:MM:SS format."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def format_duration(seconds: float) -> str:
+    """Format duration in human-readable format."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = seconds % 60
+        return f"{minutes}m {secs:.1f}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = seconds % 60
+        return f"{hours}h {minutes}m {secs:.0f}s"
 
 
 def init_session() -> Path:
     """Initialize a new session directory for storing prompts."""
-    global _session_dir, _step_counter
+    global _session_dir, _step_counter, _session_start_time
     _session_dir = Path(f"/tmp/outer/{uuid.uuid4()}")
     _session_dir.mkdir(parents=True, exist_ok=True)
     _step_counter = 0
-    print(f"Session directory: {_session_dir}")
+    _session_start_time = time.time()
+    print(f"[{timestamp()}] Session directory: {_session_dir}")
     return _session_dir
 
 
@@ -61,7 +85,7 @@ def save_step_result(step: int, stdout: str, stderr: str, exit_code: int) -> Non
     stdout_file.write_text(stdout)
     stderr_file.write_text(stderr)
     exitcode_file.write_text(str(exit_code))
-    print(f"[LOG] Step {step} results saved to: {_session_dir}/step_{step}.{{stdout,stderr,exitcode}}")
+    print(f"[{timestamp()}] Step {step} results saved to: {_session_dir}/step_{step}.{{stdout,stderr,exitcode}}")
 
 
 class AIProvider(Enum):
@@ -179,7 +203,7 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
         for attempt in range(max_retries):
             try:
                 # Print command for reproducibility (references prompt file)
-                print(f"\n[CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}\n")
+                print(f"\n[{timestamp()}] [CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}\n")
                 result = subprocess.run(
                     actual_cmd,
                     capture_output=True,
@@ -544,8 +568,9 @@ def main():
 
     while iteration < args.max_iterations:
         iteration += 1
+        iteration_start = time.time()
         print(f"\n{'='*50}")
-        print(f"Iteration {iteration}")
+        print(f"[{timestamp()}] Iteration {iteration}")
         print(f"{'='*50}")
 
         # Read current plan from disk
@@ -559,7 +584,7 @@ def main():
         # Detect stalls (same pending count as last iteration)
         if pending_todos > 0 and pending_todos == last_pending_count:
             stall_count += 1
-            print(f"⚠ No progress detected (stall count: {stall_count}/{max_stall_count})")
+            print(f"[{timestamp()}] ⚠ No progress detected (stall count: {stall_count}/{max_stall_count})")
         else:
             stall_count = 0  # Reset on progress
         last_pending_count = pending_todos
@@ -573,30 +598,32 @@ def main():
             # If we've stalled too many times, force a breakdown
             if stall_count >= max_stall_count:
                 stuck_todo = get_first_pending_todo(plan_content)
-                print(f"\n⚠ Task appears stuck. Forcing breakdown of: {stuck_todo}")
+                print(f"\n[{timestamp()}] ⚠ Task appears stuck. Forcing breakdown of: {stuck_todo}")
                 force_breakdown_todo(providers, plan_content, stuck_todo, target_dir, args.plan, yolo=args.yolo)
                 stall_count = 0  # Reset after breakdown attempt
-                print(f"✓ Task breakdown attempted")
+                elapsed = time.time() - iteration_start
+                print(f"[{timestamp()}] ✓ Task breakdown attempted (iteration took {format_duration(elapsed)})")
             else:
-                print(f"\nExecuting next TODO...")
+                print(f"\n[{timestamp()}] Executing next TODO...")
                 execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo)
-                print(f"✓ Task execution completed")
+                elapsed = time.time() - iteration_start
+                print(f"[{timestamp()}] ✓ Task execution completed (iteration took {format_duration(elapsed)})")
 
             # Read the plan from disk to check for updates (AI should have modified it)
             new_plan_content = read_file(plan_path)
             new_pending = count_pending_todos(new_plan_content)
 
             if new_pending < pending_todos:
-                print(f"✓ Progress: {pending_todos - new_pending} TODO(s) completed")
+                print(f"[{timestamp()}] ✓ Progress: {pending_todos - new_pending} TODO(s) completed")
             elif new_pending > pending_todos:
-                print(f"✓ Task broken down: {new_pending - pending_todos} new TODO(s) added")
+                print(f"[{timestamp()}] ✓ Task broken down: {new_pending - pending_todos} new TODO(s) added")
 
             # Reset validation cycles when doing tasks
             validation_cycles = 0
             continue
 
         # Step 5: All TODOs done - validate against requirements
-        print("\nAll TODOs completed. Validating against requirements...")
+        print(f"\n[{timestamp()}] All TODOs completed. Validating against requirements...")
 
         if args.dry_run:
             print("[DRY RUN] Would validate against requirements")
@@ -611,7 +638,8 @@ def main():
         new_todos_added = todos_after > todos_before
 
         if new_todos_added:
-            print(f"✓ Added {todos_after - todos_before} new TODO(s) to address gaps")
+            elapsed = time.time() - iteration_start
+            print(f"[{timestamp()}] ✓ Added {todos_after - todos_before} new TODO(s) to address gaps (iteration took {format_duration(elapsed)})")
             validation_cycles += 1
 
             if validation_cycles >= max_validation_cycles:
@@ -623,10 +651,12 @@ def main():
             continue
 
         # Step 7: No new TODOs added - we're done!
-        print("\n" + "=" * 50)
-        print("✓ ALL REQUIREMENTS MET!")
+        elapsed = time.time() - iteration_start
+        print(f"\n[{timestamp()}] " + "=" * 50)
+        print(f"[{timestamp()}] ✓ ALL REQUIREMENTS MET!")
         print("=" * 50)
         print(f"\nCompleted {total_todos} tasks in {iteration} iterations.")
+        print(f"Final iteration took {format_duration(elapsed)}")
         print(f"Final plan saved to: {plan_path}")
         break
 
@@ -639,7 +669,9 @@ def main():
     pending = count_pending_todos(plan_content)
     total = count_total_todos(plan_content)
 
-    print(f"\nFinal Status: {total - pending}/{total} TODOs completed")
+    total_elapsed = time.time() - _session_start_time if _session_start_time else 0
+    print(f"\n[{timestamp()}] Final Status: {total - pending}/{total} TODOs completed")
+    print(f"[{timestamp()}] Total session time: {format_duration(total_elapsed)}")
     if pending > 0:
         print(f"Remaining: {pending} pending TODO(s)")
 
