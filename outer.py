@@ -41,11 +41,27 @@ def init_session() -> Path:
     return _session_dir
 
 
-def get_next_prompt_file() -> Path:
-    """Get the path for the next prompt file."""
+def get_next_step_number() -> int:
+    """Get the next step number and increment the counter."""
     global _step_counter
     _step_counter += 1
-    return _session_dir / f"step_{_step_counter}.txt"
+    return _step_counter
+
+
+def get_step_prompt_file(step: int) -> Path:
+    """Get the path for a step's prompt file."""
+    return _session_dir / f"step_{step}.txt"
+
+
+def save_step_result(step: int, stdout: str, stderr: str, exit_code: int) -> None:
+    """Save the stdout, stderr, and exit code for a step."""
+    stdout_file = _session_dir / f"step_{step}.stdout"
+    stderr_file = _session_dir / f"step_{step}.stderr"
+    exitcode_file = _session_dir / f"step_{step}.exitcode"
+    stdout_file.write_text(stdout)
+    stderr_file.write_text(stderr)
+    exitcode_file.write_text(str(exit_code))
+    print(f"[LOG] Step {step} results saved to: {_session_dir}/step_{step}.{{stdout,stderr,exitcode}}")
 
 
 class AIProvider(Enum):
@@ -94,7 +110,7 @@ def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -
     # Command templates with prompt file substitution
     prompt_templates = {
         AIProvider.CLAUDE: '-p "$(cat {prompt_file})"',
-        AIProvider.CODEX: 'exec --skip-git-repo-check "$(cat {prompt_file})"',
+        AIProvider.CODEX: 'exec --json --skip-git-repo-check "$(cat {prompt_file})"',
         AIProvider.GEMINI: '-p "$(cat {prompt_file})"',
     }
 
@@ -141,7 +157,8 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
     fails over to the next provider after exhausting retries for the current one.
     """
     # Write prompt to sequential file for reproducibility
-    prompt_file = get_next_prompt_file()
+    step = get_next_step_number()
+    prompt_file = get_step_prompt_file(step)
     prompt_file.write_text(prompt)
 
     for provider_idx, provider in enumerate(providers):
@@ -167,9 +184,13 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                 if result.returncode != 0:
                     print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
                     print(f"Stderr: {result.stderr}")
+                    # Save the result even on failure for debugging
+                    save_step_result(step, result.stdout, result.stderr, result.returncode)
                     # Treat non-zero exit code as a failure that can be retried
                     raise subprocess.CalledProcessError(result.returncode, actual_cmd, result.stdout, result.stderr)
 
+                # Save successful result
+                save_step_result(step, result.stdout, result.stderr, result.returncode)
                 return result.stdout.strip()
             except subprocess.TimeoutExpired as e:
                 last_exception = e
