@@ -4,7 +4,7 @@ Outer - An iterative AI-driven development workflow tool.
 
 This script:
 1. Reads requirements.md from the current directory
-2. Asks an AI (Claude/Codex/Gemini) to generate a plan.md with TODOs
+2. Asks an AI (Claude/Codex/Gemini/Opencode) to generate a plan.md with TODOs
 3. Iteratively executes tasks, updating plan.md
 4. Validates completed work against requirements
 5. Continues until all requirements are met
@@ -68,6 +68,7 @@ class AIProvider(Enum):
     CLAUDE = "claude"
     CODEX = "codex"
     GEMINI = "gemini"
+    OPENCODE = "opencode"
 
 
 # TODO format specification
@@ -99,12 +100,14 @@ def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -
         AIProvider.CLAUDE: "claude",
         AIProvider.CODEX: "codex",
         AIProvider.GEMINI: "gemini",
+        AIProvider.OPENCODE: "opencode",
     }
 
     yolo_flags = {
         AIProvider.CLAUDE: "--dangerously-skip-permissions",
         AIProvider.CODEX: "--yolo",
         AIProvider.GEMINI: "--yolo",
+        AIProvider.OPENCODE: "",
     }
 
     # Command templates with prompt file substitution
@@ -112,6 +115,7 @@ def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -
         AIProvider.CLAUDE: '-p "$(cat {prompt_file})"',
         AIProvider.CODEX: 'exec --json --skip-git-repo-check "$(cat {prompt_file})"',
         AIProvider.GEMINI: '-p "$(cat {prompt_file})"',
+        AIProvider.OPENCODE: 'run "$(cat {prompt_file})"',
     }
 
     parts = [base_commands[provider]]
@@ -128,18 +132,21 @@ def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = 
         AIProvider.CLAUDE: ["claude"],
         AIProvider.CODEX: ["codex"],
         AIProvider.GEMINI: ["gemini"],
+        AIProvider.OPENCODE: ["opencode"],
     }
 
     yolo_flags = {
         AIProvider.CLAUDE: ["--dangerously-skip-permissions"],
         AIProvider.CODEX: ["--yolo"],
         AIProvider.GEMINI: ["--yolo"],
+        AIProvider.OPENCODE: [],
     }
 
     prompt_flags = {
         AIProvider.CLAUDE: ["-p", prompt],
         AIProvider.CODEX: ["exec", "--skip-git-repo-check", prompt],
         AIProvider.GEMINI: ["-p", prompt],
+        AIProvider.OPENCODE: ["run", prompt],
     }
 
     cmd = base_commands[provider].copy()
@@ -462,11 +469,11 @@ def main():
 
     # Parse and validate providers
     provider_names = [p.strip().lower() for p in args.provider.split(",")]
-    valid_providers = {"claude", "codex", "gemini"}
+    valid_providers = {"claude", "codex", "gemini", "opencode"}
     providers = []
     for name in provider_names:
         if name not in valid_providers:
-            print(f"Error: Invalid provider '{name}'. Valid options: claude, codex, gemini")
+            print(f"Error: Invalid provider '{name}'. Valid options: claude, codex, gemini, opencode")
             sys.exit(1)
         providers.append(AIProvider(name))
 
