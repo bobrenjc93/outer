@@ -19,12 +19,19 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
 
 
 # Session state for tracking prompts
@@ -54,6 +61,64 @@ def format_duration(seconds: float) -> str:
         return f"{hours}h {minutes}m {secs:.0f}s"
 
 
+class ProgressIndicator:
+    """Show elapsed time while a task is running."""
+
+    SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, description: str = "Running"):
+        self.description = description
+        self.start_time = None
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._tqdm_bar = None
+
+    def _spinner_loop(self):
+        """Background thread that updates the spinner."""
+        spinner_idx = 0
+        while not self._stop_event.is_set():
+            elapsed = time.time() - self.start_time
+            spinner = self.SPINNER_CHARS[spinner_idx % len(self.SPINNER_CHARS)]
+            # Clear line and print status
+            print(f"\r{spinner} {self.description} [{format_duration(elapsed)}]", end="", flush=True)
+            spinner_idx += 1
+            self._stop_event.wait(0.1)  # Update every 100ms
+
+    def start(self):
+        """Start the progress indicator."""
+        self.start_time = time.time()
+
+        if TQDM_AVAILABLE:
+            # Use tqdm with a custom format showing elapsed time
+            self._tqdm_bar = tqdm(
+                total=None,
+                desc=self.description,
+                bar_format="{desc}: {elapsed}",
+                leave=False,
+            )
+        else:
+            # Fall back to simple spinner
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._spinner_loop, daemon=True)
+            self._thread.start()
+
+    def stop(self) -> float:
+        """Stop the progress indicator and return elapsed time."""
+        elapsed = time.time() - self.start_time if self.start_time else 0
+
+        if TQDM_AVAILABLE and self._tqdm_bar:
+            self._tqdm_bar.close()
+            self._tqdm_bar = None
+        else:
+            self._stop_event.set()
+            if self._thread:
+                self._thread.join(timeout=0.5)
+            # Clear the spinner line
+            print("\r" + " " * 80 + "\r", end="", flush=True)
+
+        return elapsed
+
+
 def init_session() -> Path:
     """Initialize a new session directory for storing prompts."""
     global _session_dir, _step_counter, _session_start_time
@@ -75,6 +140,15 @@ def get_next_step_number() -> int:
 def get_step_prompt_file(step: int) -> Path:
     """Get the path for a step's prompt file."""
     return _session_dir / f"step_{step}.txt"
+
+
+def get_step_output_files(step: int) -> tuple[Path, Path, Path]:
+    """Get the paths for a step's stdout, stderr, and exit code files."""
+    return (
+        _session_dir / f"step_{step}.stdout",
+        _session_dir / f"step_{step}.stderr",
+        _session_dir / f"step_{step}.exitcode",
+    )
 
 
 def save_step_result(step: int, stdout: str, stderr: str, exit_code: int) -> None:
@@ -186,11 +260,15 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
 
     Uses exponential backoff for retries on failure. If multiple providers are given,
     fails over to the next provider after exhausting retries for the current one.
+    Output is written to files in real-time so they can be tailed.
     """
     # Write prompt to sequential file for reproducibility
     step = get_next_step_number()
     prompt_file = get_step_prompt_file(step)
     prompt_file.write_text(prompt)
+
+    # Get output file paths
+    stdout_file, stderr_file, exitcode_file = get_step_output_files(step)
 
     for provider_idx, provider in enumerate(providers):
         # Build the actual command with prompt inline (for subprocess)
@@ -203,28 +281,61 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
         for attempt in range(max_retries):
             try:
                 # Print command for reproducibility (references prompt file)
-                print(f"\n[{timestamp()}] [CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}\n")
-                result = subprocess.run(
-                    actual_cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    cwd=str(working_dir),
-                )
+                print(f"\n[{timestamp()}] [CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}")
 
-                if result.returncode != 0:
-                    print(f"Warning: AI command returned non-zero exit code: {result.returncode}")
-                    print(f"Stderr: {result.stderr}")
-                    # Save the result even on failure for debugging
-                    save_step_result(step, result.stdout, result.stderr, result.returncode)
+                # Print output file paths BEFORE starting so user can tail them
+                print(f"[{timestamp()}] Output files (tail -f to monitor):")
+                print(f"  stdout:   {stdout_file}")
+                print(f"  stderr:   {stderr_file}")
+                print(f"  exitcode: {exitcode_file}\n")
+
+                # Start progress indicator
+                progress = ProgressIndicator(f"Step {step}: {provider.value}")
+                progress.start()
+
+                # Use Popen with file redirection for real-time output
+                with open(stdout_file, "w") as stdout_fh, open(stderr_file, "w") as stderr_fh:
+                    process = subprocess.Popen(
+                        actual_cmd,
+                        stdout=stdout_fh,
+                        stderr=stderr_fh,
+                        text=True,
+                        cwd=str(working_dir),
+                    )
+
+                    # Wait for process with optional timeout
+                    try:
+                        returncode = process.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                        # Stop progress and raise
+                        progress.stop()
+                        raise
+
+                # Stop progress indicator
+                elapsed = progress.stop()
+
+                # Write exit code
+                exitcode_file.write_text(str(returncode))
+
+                # Read output back
+                stdout_content = stdout_file.read_text()
+                stderr_content = stderr_file.read_text()
+
+                print(f"[{timestamp()}] Step {step} completed in {format_duration(elapsed)} (exit code: {returncode})")
+
+                if returncode != 0:
+                    print(f"Warning: AI command returned non-zero exit code: {returncode}")
+                    print(f"Stderr: {stderr_content}")
                     # Treat non-zero exit code as a failure that can be retried
-                    raise subprocess.CalledProcessError(result.returncode, actual_cmd, result.stdout, result.stderr)
+                    raise subprocess.CalledProcessError(returncode, actual_cmd, stdout_content, stderr_content)
 
-                # Save successful result
-                save_step_result(step, result.stdout, result.stderr, result.returncode)
-                return result.stdout.strip()
+                return stdout_content.strip()
             except subprocess.TimeoutExpired as e:
                 last_exception = e
+                # Write exit code as timeout indicator
+                exitcode_file.write_text("timeout")
                 if attempt < max_retries - 1:
                     wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
                     print(f"AI call timed out with {provider.value} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
