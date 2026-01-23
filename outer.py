@@ -715,7 +715,8 @@ def main():
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task breakdown attempted (iteration took {format_duration(elapsed)})")
             else:
-                print(f"\n[{timestamp()}] Executing next TODO...")
+                next_todo = get_first_pending_todo(plan_content)
+                print(f"\n[{timestamp()}] Executing TODO: {next_todo}")
                 execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo)
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task execution completed (iteration took {format_duration(elapsed)})")
