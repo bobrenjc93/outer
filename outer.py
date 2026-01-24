@@ -255,7 +255,7 @@ def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = 
     return cmd
 
 
-def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3) -> str:
+def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3, current_todo: str | None = None) -> str:
     """Call the AI provider with the given prompt and return the response.
 
     Uses exponential backoff for retries on failure. If multiple providers are given,
@@ -340,6 +340,8 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                     wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
                     print(f"AI call timed out with {provider.value} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
                     time.sleep(wait_time)
+                    if current_todo:
+                        print(f"\n[{timestamp()}] Retrying TODO: {current_todo}")
                 else:
                     print(f"Error: AI call timed out after {max_retries} attempts with {provider.value}")
             except subprocess.CalledProcessError as e:
@@ -348,6 +350,8 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
                     wait_time = 10 * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, ...
                     print(f"AI call failed with {provider.value} (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
                     time.sleep(wait_time)
+                    if current_todo:
+                        print(f"\n[{timestamp()}] Retrying TODO: {current_todo}")
                 else:
                     print(f"Error: AI call failed after {max_retries} attempts with {provider.value}")
             except FileNotFoundError:
@@ -482,7 +486,7 @@ Important:
 - Update the Status field in the TODO item
 - Do NOT output the plan content - just update the file directly"""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo)
+    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=first_todo)
 
 
 def force_breakdown_todo(providers: list[AIProvider], plan_content: str, stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
@@ -508,7 +512,7 @@ Your task:
 CRITICAL: You MUST edit {plan_filename} and mark at least one TODO as completed before finishing.
 Do NOT output the plan content - just update the file directly."""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo)
+    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=stuck_todo)
 
 
 def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> tuple[bool, str]:
