@@ -142,12 +142,17 @@ def get_step_prompt_file(step: int) -> Path:
     return _session_dir / f"step_{step}.txt"
 
 
-def get_step_output_files(step: int) -> tuple[Path, Path, Path]:
-    """Get the paths for a step's stdout, stderr, and exit code files."""
+def get_step_output_files(step: int, attempt: int = 0) -> tuple[Path, Path, Path]:
+    """Get the paths for a step's stdout, stderr, and exit code files.
+
+    If attempt > 0, includes the attempt number in the filename to preserve
+    output from retry attempts.
+    """
+    suffix = f"_attempt{attempt}" if attempt > 0 else ""
     return (
-        _session_dir / f"step_{step}.stdout",
-        _session_dir / f"step_{step}.stderr",
-        _session_dir / f"step_{step}.exitcode",
+        _session_dir / f"step_{step}{suffix}.stdout",
+        _session_dir / f"step_{step}{suffix}.stderr",
+        _session_dir / f"step_{step}{suffix}.exitcode",
     )
 
 
@@ -267,9 +272,6 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
     prompt_file = get_step_prompt_file(step)
     prompt_file.write_text(prompt)
 
-    # Get output file paths
-    stdout_file, stderr_file, exitcode_file = get_step_output_files(step)
-
     for provider_idx, provider in enumerate(providers):
         # Build the actual command with prompt inline (for subprocess)
         actual_cmd = _get_ai_command_with_prompt(provider, prompt, yolo=yolo)
@@ -279,6 +281,9 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
 
         last_exception = None
         for attempt in range(max_retries):
+            # Get output file paths with attempt number to preserve output from retries
+            stdout_file, stderr_file, exitcode_file = get_step_output_files(step, attempt)
+
             try:
                 # Print command for reproducibility (references prompt file)
                 print(f"\n[{timestamp()}] [CMD] cd {shlex.quote(str(working_dir))} && {display_cmd}")
