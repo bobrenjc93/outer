@@ -363,6 +363,8 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
         # All retries exhausted for this provider
         if not is_last_provider:
             print(f"Failing over to next provider: {providers[provider_idx + 1].value}")
+            if current_todo:
+                print(f"\n[{timestamp()}] Retrying TODO: {current_todo}")
         else:
             print(f"Error: AI invocation failed after trying all providers. Stopping.")
             sys.exit(1)
