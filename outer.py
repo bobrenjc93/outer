@@ -197,7 +197,7 @@ Example:
 """
 
 
-def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -> str:
+def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False, prefix: str = "") -> str:
     """Get a display-friendly command string that references the prompt file."""
     base_commands = {
         AIProvider.CLAUDE: "claude",
@@ -222,6 +222,8 @@ def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -
     }
 
     parts = [base_commands[provider]]
+    if prefix:
+        parts.append(prefix)
     if yolo:
         parts.append(yolo_flags[provider])
     parts.append(prompt_templates[provider].format(prompt_file=shlex.quote(prompt_file)))
@@ -229,7 +231,7 @@ def get_ai_command(provider: AIProvider, prompt_file: str, yolo: bool = False) -
     return " ".join(parts)
 
 
-def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = False) -> list[str]:
+def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = False, prefix: str = "") -> list[str]:
     """Get the command with the actual prompt embedded (for subprocess execution)."""
     base_commands = {
         AIProvider.CLAUDE: ["claude"],
@@ -253,6 +255,9 @@ def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = 
     }
 
     cmd = base_commands[provider].copy()
+    if prefix:
+        # Split the prefix string into individual arguments
+        cmd.extend(shlex.split(prefix))
     if yolo:
         cmd.extend(yolo_flags[provider])
     cmd.extend(prompt_flags[provider])
@@ -260,7 +265,7 @@ def _get_ai_command_with_prompt(provider: AIProvider, prompt: str, yolo: bool = 
     return cmd
 
 
-def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3, current_todo: str | None = None) -> str:
+def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: bool = False, timeout: int | None = None, max_retries: int = 3, current_todo: str | None = None, prefix: str = "") -> str:
     """Call the AI provider with the given prompt and return the response.
 
     Uses exponential backoff for retries on failure. If multiple providers are given,
@@ -274,9 +279,9 @@ def call_ai(providers: list[AIProvider], prompt: str, working_dir: Path, yolo: b
 
     for provider_idx, provider in enumerate(providers):
         # Build the actual command with prompt inline (for subprocess)
-        actual_cmd = _get_ai_command_with_prompt(provider, prompt, yolo=yolo)
+        actual_cmd = _get_ai_command_with_prompt(provider, prompt, yolo=yolo, prefix=prefix)
         # Build display command referencing the file (for logging)
-        display_cmd = get_ai_command(provider, str(prompt_file), yolo=yolo)
+        display_cmd = get_ai_command(provider, str(prompt_file), yolo=yolo, prefix=prefix)
         is_last_provider = provider_idx == len(providers) - 1
 
         last_exception = None
@@ -429,7 +434,7 @@ def is_valid_plan_format(plan_content: str) -> bool:
     return True
 
 
-def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
+def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
     """Generate the initial plan.md from requirements."""
     prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
 
@@ -449,7 +454,7 @@ Write a {plan_filename} file with:
 
 Write the plan directly to {plan_filename}. Do not output the contents to stdout."""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo)
+    call_ai(providers, prompt, working_dir, yolo=yolo, prefix=prefix)
 
 
 def get_first_pending_todo(plan_content: str) -> Optional[str]:
@@ -460,7 +465,7 @@ def get_first_pending_todo(plan_content: str) -> Optional[str]:
     return None
 
 
-def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
+def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
     """Ask the AI to execute one TODO item and update the plan directly on disk."""
     first_todo = get_first_pending_todo(plan_content)
     todo_hint = f"\nThe first pending TODO is: {first_todo}" if first_todo else ""
@@ -493,10 +498,10 @@ Important:
 - Update the Status field in the TODO item
 - Do NOT output the plan content - just update the file directly"""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=first_todo)
+    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=first_todo, prefix=prefix)
 
 
-def force_breakdown_todo(providers: list[AIProvider], plan_content: str, stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False) -> None:
+def force_breakdown_todo(providers: list[AIProvider], plan_content: str, stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
     """Force the AI to break down a stuck TODO into smaller pieces."""
     prompt = f"""You are a software architect. The following TODO has been stuck and not making progress:
 
@@ -519,10 +524,10 @@ Your task:
 CRITICAL: You MUST edit {plan_filename} and mark at least one TODO as completed before finishing.
 Do NOT output the plan content - just update the file directly."""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=stuck_todo)
+    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=stuck_todo, prefix=prefix)
 
 
-def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False) -> tuple[bool, str]:
+def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False, prefix: str = "") -> tuple[bool, str]:
     """Check if the completed plan meets all requirements. Returns (is_complete, updated_plan)."""
     prompt = f"""You are a software architect reviewing completed work.
 
@@ -550,7 +555,7 @@ GAPS_FOUND: YES or NO
 UPDATED_PLAN:
 <complete updated plan.md content, with any new TODOs added at the end>"""
 
-    response = call_ai(providers, prompt, working_dir, yolo=yolo)
+    response = call_ai(providers, prompt, working_dir, yolo=yolo, prefix=prefix)
 
     # Parse the response
     gaps_found = "GAPS_FOUND: YES" in response.upper()
@@ -609,6 +614,12 @@ def main():
         "--yolo",
         action="store_true",
         help="Skip permission prompts (maps to provider-specific flags)",
+    )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default="",
+        help="Custom prefix to add after the provider command (e.g., '--model opus')",
     )
 
     args = parser.parse_args()
@@ -670,14 +681,14 @@ def main():
             if args.dry_run:
                 print("[DRY RUN] Would regenerate plan.md")
                 return
-            generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo)
+            generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
             print(f"✓ Regenerated {args.plan}")
     else:
         print(f"Generating initial plan...")
         if args.dry_run:
             print("[DRY RUN] Would generate plan.md")
             return
-        generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo)
+        generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
         print(f"✓ Generated {args.plan}")
 
     # Main loop
@@ -721,14 +732,14 @@ def main():
             if stall_count >= max_stall_count:
                 stuck_todo = get_first_pending_todo(plan_content)
                 print(f"\n[{timestamp()}] ⚠ Task appears stuck. Forcing breakdown of: {stuck_todo}")
-                force_breakdown_todo(providers, plan_content, stuck_todo, target_dir, args.plan, yolo=args.yolo)
+                force_breakdown_todo(providers, plan_content, stuck_todo, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
                 stall_count = 0  # Reset after breakdown attempt
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task breakdown attempted (iteration took {format_duration(elapsed)})")
             else:
                 next_todo = get_first_pending_todo(plan_content)
                 print(f"\n[{timestamp()}] Executing TODO: {next_todo}")
-                execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo)
+                execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task execution completed (iteration took {format_duration(elapsed)})")
 
@@ -753,7 +764,7 @@ def main():
             break
 
         todos_before = count_total_todos(plan_content)
-        is_complete, updated_plan = validate_against_requirements(providers, plan_content, requirements, target_dir, yolo=args.yolo)
+        is_complete, updated_plan = validate_against_requirements(providers, plan_content, requirements, target_dir, yolo=args.yolo, prefix=args.prefix)
         todos_after = count_total_todos(updated_plan)
 
         write_file(plan_path, updated_plan)
