@@ -434,16 +434,11 @@ def is_valid_plan_format(plan_content: str) -> bool:
     return True
 
 
-def generate_initial_plan(providers: list[AIProvider], requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
+def generate_initial_plan(providers: list[AIProvider], working_dir: Path, plan_filename: str, requirements_filename: str, yolo: bool = False, prefix: str = "") -> None:
     """Generate the initial plan.md from requirements."""
-    prompt = f"""You are a software architect. Read the following requirements and create a detailed implementation plan.
+    prompt = f"""You are a software architect. Read {requirements_filename} for the project requirements and create a detailed implementation plan.
 
 {TODO_FORMAT}
-
-Requirements:
----
-{requirements}
----
 
 Write a {plan_filename} file with:
 1. An overview section summarizing the project
@@ -465,17 +460,9 @@ def get_first_pending_todo(plan_content: str) -> Optional[str]:
     return None
 
 
-def execute_single_todo(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
+def execute_single_todo(providers: list[AIProvider], working_dir: Path, plan_filename: str, requirements_filename: str, current_todo: str | None = None, yolo: bool = False, prefix: str = "") -> None:
     """Ask the AI to execute one TODO item and update the plan directly on disk."""
-    first_todo = get_first_pending_todo(plan_content)
-    todo_hint = f"\nThe first pending TODO is: {first_todo}" if first_todo else ""
-
-    prompt = f"""You are a software developer. Read the plan.md file in the current directory for the project plan.{todo_hint}
-
-The original requirements are:
----
-{requirements}
----
+    prompt = f"""You are a software developer. Read {plan_filename} for the project plan and {requirements_filename} for the original requirements.
 
 Your task:
 1. Read {plan_filename} to find the FIRST uncompleted TODO item (marked with `- [ ]`)
@@ -498,19 +485,16 @@ Important:
 - Update the Status field in the TODO item
 - Do NOT output the plan content - just update the file directly"""
 
-    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=first_todo, prefix=prefix)
+    call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=current_todo, prefix=prefix)
 
 
-def force_breakdown_todo(providers: list[AIProvider], plan_content: str, stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
+def force_breakdown_todo(providers: list[AIProvider], stuck_todo: str, working_dir: Path, plan_filename: str, yolo: bool = False, prefix: str = "") -> None:
     """Force the AI to break down a stuck TODO into smaller pieces."""
     prompt = f"""You are a software architect. The following TODO has been stuck and not making progress:
 
 STUCK TODO: {stuck_todo}
 
-Current {plan_filename}:
----
-{plan_content}
----
+Read {plan_filename} for the current plan.
 
 Your task:
 1. This TODO is too large. You MUST break it down into 2-4 smaller, atomic sub-TODOs.
@@ -527,19 +511,11 @@ Do NOT output the plan content - just update the file directly."""
     call_ai(providers, prompt, working_dir, yolo=yolo, current_todo=stuck_todo, prefix=prefix)
 
 
-def validate_against_requirements(providers: list[AIProvider], plan_content: str, requirements: str, working_dir: Path, yolo: bool = False, prefix: str = "") -> tuple[bool, str]:
+def validate_against_requirements(providers: list[AIProvider], plan_content: str, working_dir: Path, plan_filename: str, requirements_filename: str, yolo: bool = False, prefix: str = "") -> tuple[bool, str]:
     """Check if the completed plan meets all requirements. Returns (is_complete, updated_plan)."""
     prompt = f"""You are a software architect reviewing completed work.
 
-Original Requirements:
----
-{requirements}
----
-
-Current Plan (with completed TODOs):
----
-{plan_content}
----
+Read {requirements_filename} for the original requirements and {plan_filename} for the current plan with completed TODOs.
 
 Your task:
 1. Carefully compare the completed work against ALL original requirements
@@ -657,14 +633,13 @@ def main():
     # Initialize session for prompt logging
     init_session()
 
-    # Step 1: Read requirements
-    requirements = read_file(requirements_path)
-    if not requirements:
+    # Step 1: Check requirements file exists
+    if not requirements_path.exists():
         print(f"Error: {requirements_path} not found.")
         print("Please create a requirements.md file with your project requirements.")
         sys.exit(1)
 
-    print(f"✓ Loaded requirements from {args.requirements}")
+    print(f"✓ Found requirements at {args.requirements}")
 
     # Step 2: Generate or load plan
     plan_content = read_file(plan_path)
@@ -681,7 +656,7 @@ def main():
             if args.dry_run:
                 print("[DRY RUN] Would regenerate plan.md")
                 return
-            generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
+            generate_initial_plan(providers, target_dir, args.plan, args.requirements, yolo=args.yolo, prefix=args.prefix)
             print(f"✓ Regenerated {args.plan}")
     else:
         print(f"Generating initial plan...")
@@ -732,14 +707,14 @@ def main():
             if stall_count >= max_stall_count:
                 stuck_todo = get_first_pending_todo(plan_content)
                 print(f"\n[{timestamp()}] ⚠ Task appears stuck. Forcing breakdown of: {stuck_todo}")
-                force_breakdown_todo(providers, plan_content, stuck_todo, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
+                force_breakdown_todo(providers, stuck_todo, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
                 stall_count = 0  # Reset after breakdown attempt
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task breakdown attempted (iteration took {format_duration(elapsed)})")
             else:
                 next_todo = get_first_pending_todo(plan_content)
                 print(f"\n[{timestamp()}] Executing TODO: {next_todo}")
-                execute_single_todo(providers, plan_content, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
+                execute_single_todo(providers, target_dir, args.plan, args.requirements, current_todo=next_todo, yolo=args.yolo, prefix=args.prefix)
                 elapsed = time.time() - iteration_start
                 print(f"[{timestamp()}] ✓ Task execution completed (iteration took {format_duration(elapsed)})")
 
@@ -764,7 +739,7 @@ def main():
             break
 
         todos_before = count_total_todos(plan_content)
-        is_complete, updated_plan = validate_against_requirements(providers, plan_content, requirements, target_dir, yolo=args.yolo, prefix=args.prefix)
+        is_complete, updated_plan = validate_against_requirements(providers, plan_content, target_dir, args.plan, args.requirements, yolo=args.yolo, prefix=args.prefix)
         todos_after = count_total_todos(updated_plan)
 
         write_file(plan_path, updated_plan)
