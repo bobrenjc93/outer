@@ -663,7 +663,7 @@ def main():
         if args.dry_run:
             print("[DRY RUN] Would generate plan.md")
             return
-        generate_initial_plan(providers, requirements, target_dir, args.plan, yolo=args.yolo, prefix=args.prefix)
+        generate_initial_plan(providers, target_dir, args.plan, args.requirements, yolo=args.yolo, prefix=args.prefix)
         print(f"✓ Generated {args.plan}")
 
     # Main loop
